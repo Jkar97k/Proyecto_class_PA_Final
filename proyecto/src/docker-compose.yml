@@ -13,7 +13,7 @@ services:
       MONGODB_ATLAS_URI: ${MONGODB_ATLAS_URI}
       MONGODB_LOCAL_URI: mongodb://${MONGO_LOCAL_USERNAME}:${MONGO_LOCAL_PASSWORD}@mongo_db:${MONGO_LOCAL_PORT}/${MONGO_LOCAL_DB}?authSource=admin
     ports:
-      - "5000:5000"
+      - "5001:5000"
     networks:
       - mongito-net
     restart: always
@@ -26,7 +26,7 @@ services:
       MONGO_INITDB_ROOT_USERNAME: ${MONGO_LOCAL_USERNAME}
       MONGO_INITDB_ROOT_PASSWORD: ${MONGO_LOCAL_PASSWORD}
     ports:
-      - "27017:27017"
+      - "27018:27017"
     volumes:
       - mongo-data:/data/db
     networks:
@@ -46,7 +46,7 @@ services:
       ME_CONFIG_BASICAUTH_USERNAME: ${ME_CONFIG_BASICAUTH_USERNAME}
       ME_CONFIG_BASICAUTH_PASSWORD: ${ME_CONFIG_BASICAUTH_PASSWORD}
     ports:
-      - "8081:8081"
+      - "8085:8081"
     networks:
       - mongito-net
     restart: always

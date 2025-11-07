@@ -4,6 +4,8 @@ from flask import Flask, render_template, request, jsonify
 from pymongo import MongoClient
 from dotenv import load_dotenv
 from pathlib import Path
+from datetime import datetime
+
 
 # Carga el archivo data.env para ejecución local (fuera de Docker)
 # En Docker, las variables son inyectadas por docker-compose
@@ -23,6 +25,7 @@ client_atlas = None
 client_local = None
 db_atlas = None
 db_local = None
+sensor1_collection = None
 
 def init_mongodb_connection():
     """Inicializa la conexión a Atlas (externa) y a la base de datos local (interna de Docker)."""
@@ -39,6 +42,7 @@ def init_mongodb_connection():
             client_atlas.admin.command('ping') # Prueba la conexión
             # Nota: Cambia "ClusterPeoyect" por el nombre de tu base de datos principal en Atlas
             db_atlas = client_atlas.get_database("ClusterP1") 
+            sensor1_collection = client_atlas.db.p1 
             print(f"✅ Conexión ATLAS exitosa. Base de datos: {db_atlas.name}")
         except Exception as e:
             print(f"❌ Error de conexión a MongoDB ATLAS: {e}")
@@ -135,6 +139,48 @@ def insertar():
     resultado = db_atlas.p1.insert_one(datos)
     return jsonify({"insertado_id": str(resultado.inserted_id)})
 
+@app.route('/receive_sensor_data', methods=['POST'])
+def receive_sensor_data():
+    if sensor1_collection is None:
+        
+        return jsonify({"error": "La conexión a la base de datos no está establecida."}), 503
+
+    try:
+        # Obtener los datos JSON
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({"error": "No se proporcionó un payload JSON"}), 400
+
+        
+        sensor_type = data.get('sensor_type')
+        value = data.get('value')
+        unit = data.get('unit', 'N/A') 
+
+        if sensor_type is None or value is None:
+            return jsonify({"error": "Faltan campos obligatorios: 'sensor_type' o 'value'"}), 400
+
+        
+        doc_to_insert = {
+            "sensor": sensor_type,
+            "valor": value,
+            "unidad": unit,
+            "timestamp": datetime.now() 
+        }
+
+        
+        result = sensor1_collection.insert_one(doc_to_insert)
+
+
+        return jsonify({
+            "status": "success",
+            "message": "Dato de sensor recibido y guardado exitosamente.",
+            "id_mongo": str(result.inserted_id),
+            "data_received": doc_to_insert
+        }), 201
+    except Exception as e:
+        print(f"Error al procesar los datos del sensor: {e}")
+        return jsonify({"status": "error", "message": f"Error interno del servidor: {e}"}), 500
 
 if __name__ == '__main__':
     # Usar el puerto 5000 (mapeado a 5000 por docker-compose) y host='0.0.0.0'
