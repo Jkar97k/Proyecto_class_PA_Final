@@ -178,10 +178,16 @@ def receive_sensor_data():
             "id_mongo": str(result.inserted_id),
             "data_received": doc_to_insert
         }), 201
+    
     except Exception as e:
         print(f"Error al procesar los datos del sensor: {e}")
         return jsonify({"status": "error", "message": f"Error interno del servidor: {e}"}), 500
+    
+@app.route('/tabla')
+def tabla():
+    usuarios = list(db_atlas.p1.find({}, {"_id": 0}))
+    return render_template('tabla.html', usuarios=usuarios)
 
 if __name__ == '__main__':
     # Usar el puerto 5000 (mapeado a 5000 por docker-compose) y host='0.0.0.0'
-    app.run(host='0.0.0.0', port=5001, debug=True)
+    app.run(host='0.0.0.0', port=6001, debug=True)
