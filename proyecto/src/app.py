@@ -42,8 +42,8 @@ def init_mongodb_connection():
             client_atlas.admin.command('ping') # Prueba la conexión
             # Nota: Cambia "ClusterPeoyect" por el nombre de tu base de datos principal en Atlas
             db_atlas = client_atlas.get_database("ClusterP1") 
-            sensor1_collection = client_atlas.db.p1 
-            print(f"✅ Conexión ATLAS exitosa. Base de datos: {db_atlas.name}")
+            sensor1_collection = db_atlas.p1 
+            print(f"✅ Conexión ATLAS exitosa. Base de datos: {db_atlas.name} collection {sensor1_collection} ")
         except Exception as e:
             print(f"❌ Error de conexión a MongoDB ATLAS: {e}")
 
