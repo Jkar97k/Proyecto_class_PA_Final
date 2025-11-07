@@ -141,6 +141,8 @@ def insertar():
 
 @app.route('/receive_sensor_data', methods=['POST'])
 def receive_sensor_data():
+    sensor1_collection = db_atlas.p1 
+
     print(sensor1_collection)
     if sensor1_collection is None:
         
