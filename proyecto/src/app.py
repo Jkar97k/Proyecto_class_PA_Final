@@ -141,6 +141,7 @@ def insertar():
 
 @app.route('/receive_sensor_data', methods=['POST'])
 def receive_sensor_data():
+    print(sensor1_collection)
     if sensor1_collection is None:
         
         return jsonify({"error": "La conexión a la base de datos no está establecida."}), 503
