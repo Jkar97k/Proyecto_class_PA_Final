@@ -141,7 +141,7 @@ def insertar():
 
 @app.route('/receive_sensor_data', methods=['POST'])
 def receive_sensor_data():
-    sensor1_collection = db_atlas.p1 
+    sensor1_collection = db_atlas.p1
 
     if sensor1_collection is None:
         return jsonify({"error": "La conexión a la base de datos no está establecida."}), 503
@@ -151,13 +151,19 @@ def receive_sensor_data():
         if not data:
             return jsonify({"error": "No se proporcionó un payload JSON"}), 400
 
+        # 🔍 Log detallado de datos recibidos y sus tipos
+        print("📦 Datos recibidos del ESP32:")
+        for key, value in data.items():
+            print(f"   ➜ {key}: {value} (tipo: {type(value).__name__})")
+
         sensor_type = data.get('sensor_type')
         value = data.get('value')
-        unit = data.get('unit', 'N/A') 
+        unit = data.get('unit', 'N/A')
 
         if sensor_type is None or value is None:
             return jsonify({"error": "Faltan campos obligatorios: 'sensor_type' o 'value'"}), 400
 
+        # Documento a insertar
         doc_to_insert = {
             "sensor": sensor_type,
             "valor": value,
@@ -165,25 +171,26 @@ def receive_sensor_data():
             "timestamp": datetime.now()
         }
 
-        result = sensor1_collection.insert_one(doc_to_insert)
+        # Inserción en MongoDB
+        sensor1_collection.insert_one(doc_to_insert)
+        print("✅ Documento guardado exitosamente en MongoDB.")
 
-        # Convertir datetime a string ISO y asegurar JSON válido
+        # Convertir datetime a ISO para que sea legible en JSON
         safe_doc = {
             k: (v.isoformat() if isinstance(v, datetime) else v)
             for k, v in doc_to_insert.items()
         }
-        #print(f"Documento insertado con ID: {result}")
 
         return jsonify({
             "status": "success",
             "message": "Dato de sensor recibido y guardado exitosamente.",
-            #"id_mongo": str(result.inserted_id),
             "data_received": safe_doc
         }), 201
 
     except Exception as e:
-        print(f"Error al procesar los datos del sensor: {e}")
+        print(f"❌ Error al procesar los datos del sensor: {e}")
         return jsonify({"status": "error", "message": f"Error interno del servidor: {e}"}), 500
+
 
     
 @app.route('/tabla')
