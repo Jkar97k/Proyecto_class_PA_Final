@@ -169,15 +169,15 @@ def receive_sensor_data():
             "timestamp": datetime.now()
         }
 
-        result = sensor1_collection.insert_one(doc_to_insert)
+        #result = sensor1_collection.insert_one(doc_to_insert)
 
         # Convertir datetime a string ISO y asegurar JSON válido
         safe_doc = {
             k: (v.isoformat() if isinstance(v, datetime) else v)
             for k, v in doc_to_insert.items()
         }
-        print(f"Documento insertado con ID: {result.inserted_id} {type(result.inserted_id)}")
-        
+        #print(f"Documento insertado con ID: {result.inserted_id} {type(result.inserted_id)}")
+
         return jsonify({
             "status": "success",
             "message": "Dato de sensor recibido y guardado exitosamente.",
