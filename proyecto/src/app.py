@@ -178,11 +178,10 @@ def receive_sensor_data():
         
         result = sensor1_collection.insert_one(doc_to_insert)
 
-
         return jsonify({
             "status": "success",
             "message": "Dato de sensor recibido y guardado exitosamente.",
-            "id_mongo": str(result.inserted_id),
+            "id_mongo": str(result.inserted_id),  # Convertir ObjectId a string
             "data_received": doc_to_insert
         }), 201
     
