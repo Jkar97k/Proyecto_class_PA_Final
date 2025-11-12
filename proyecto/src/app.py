@@ -147,19 +147,14 @@ def insertar():
 def receive_sensor_data():
     sensor1_collection = db_atlas.p1 
 
-    print(sensor1_collection)
     if sensor1_collection is None:
-        
         return jsonify({"error": "La conexión a la base de datos no está establecida."}), 503
 
     try:
-        # Obtener los datos JSON
         data = request.get_json()
-        
         if not data:
             return jsonify({"error": "No se proporcionó un payload JSON"}), 400
 
-        
         sensor_type = data.get('sensor_type')
         value = data.get('value')
         unit = data.get('unit', 'N/A') 
@@ -167,27 +162,32 @@ def receive_sensor_data():
         if sensor_type is None or value is None:
             return jsonify({"error": "Faltan campos obligatorios: 'sensor_type' o 'value'"}), 400
 
-        
         doc_to_insert = {
             "sensor": sensor_type,
             "valor": value,
             "unidad": unit,
-            "timestamp": datetime.now() 
+            "timestamp": datetime.now()
         }
 
-        
         result = sensor1_collection.insert_one(doc_to_insert)
+
+        # Convertir datetime a string ISO y asegurar JSON válido
+        safe_doc = {
+            k: (v.isoformat() if isinstance(v, datetime) else v)
+            for k, v in doc_to_insert.items()
+        }
 
         return jsonify({
             "status": "success",
             "message": "Dato de sensor recibido y guardado exitosamente.",
-            "id_mongo": str(result.inserted_id),  # Convertir ObjectId a string
-            "data_received": doc_to_insert
+            "id_mongo": str(result.inserted_id),
+            "data_received": safe_doc
         }), 201
-    
+
     except Exception as e:
         print(f"Error al procesar los datos del sensor: {e}")
         return jsonify({"status": "error", "message": f"Error interno del servidor: {e}"}), 500
+
     
 @app.route('/tabla')
 def tabla():
