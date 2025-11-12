@@ -176,11 +176,12 @@ def receive_sensor_data():
             k: (v.isoformat() if isinstance(v, datetime) else v)
             for k, v in doc_to_insert.items()
         }
-
+        print(f"Documento insertado con ID: {result.inserted_id} {type(result.inserted_id)}")
+        
         return jsonify({
             "status": "success",
             "message": "Dato de sensor recibido y guardado exitosamente.",
-            "id_mongo": str(result.inserted_id),
+            #"id_mongo": str(result.inserted_id),
             "data_received": safe_doc
         }), 201
 
