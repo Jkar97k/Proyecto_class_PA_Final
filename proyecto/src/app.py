@@ -178,9 +178,7 @@ def test_insert():
             status=500
         )
 
-
-
-
+#------------------------wokwi----------------------------
 
 # --- Colecciones simuladas (ajusta según tus nombres reales) ---
 colecciones = {
@@ -256,6 +254,36 @@ def receive_sensor_data():
             "mensaje": str(e)
         }), 500
 
+#grafana 
+
+@app.route('/LeerSensores', methods=['GET'])
+def obtener_datos_sensores():
+    try:
+        # Accedemos a las colecciones de los tres sensores
+        colecciones = [db_atlas.Sensor_1, db_atlas.Sensor_2, db_atlas.Sensor_3]
+
+        datos_totales = []
+        for col in colecciones:
+            # Tomar los últimos 10 registros de cada sensor
+            docs = list(col.find().sort("_id", -1).limit(10))
+
+            # Serializar los ObjectId y datetime
+            for d in docs:
+                d["_id"] = str(d["_id"])
+                if "TipoEjecucion" in d and hasattr(d["TipoEjecucion"], "isoformat"):
+                    d["TipoEjecucion"] = d["TipoEjecucion"].isoformat()
+
+            datos_totales.extend(docs)
+
+        return jsonify({
+            "status": "ok",
+            "total_registros": len(datos_totales),
+            "datos": datos_totales
+        }), 200
+
+    except Exception as e:
+        print(f"❌ Error al obtener datos: {e}")
+        return jsonify({"status": "error", "mensaje": str(e)}), 500
 
 
 @app.route('/tabla')
