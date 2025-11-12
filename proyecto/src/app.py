@@ -124,6 +124,9 @@ def vamos():
             "message": f"Error interno: {e}"
         }), 500
 
+@app.route('/')
+def ruta():
+    return 'Mi primer hola mundo'
 
 @app.route('/index')
 def index():
