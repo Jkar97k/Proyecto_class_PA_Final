@@ -94,10 +94,14 @@ def check_db_status():
         status['local'] = {"status": "error", "message": "Local no inicializado."}
 
     
+    safe_doc = {k: (str(v) if isinstance(v, datetime) else v) for k, v in doc_to_insert.items()}
+
     return jsonify({
-        "status_general": "OK" if status['atlas']['status'] == 'ok' and status['local']['status'] == 'ok' else "FALLO",
-        "conexiones": status
-    }), 200
+        "status": "success",
+        "message": "Dato de sensor recibido y guardado exitosamente.",
+        "id_mongo": str(result.inserted_id),
+        "data_received": safe_doc
+    }), 201
 
 # Ejemplo de ruta que realiza operaciones en ambas bases de datos
 @app.route('/vamos')
