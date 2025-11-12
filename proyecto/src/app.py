@@ -1,10 +1,22 @@
 import os
 import time
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify,Response
 from pymongo import MongoClient
 from dotenv import load_dotenv
 from pathlib import Path
 from datetime import datetime
+from bson import ObjectId
+import json
+
+
+# --- Serializador JSON personalizado para manejar ObjectId de MongoDB ---
+class JSONEncoder(json.JSONEncoder):
+    def default(self, o):
+        if isinstance(o, ObjectId):
+            return str(o)
+        if isinstance(o, datetime):
+            return o.isoformat()  # convierte datetime a string legible
+        return super().default(o)
 
 
 # Carga el archivo .env
@@ -12,6 +24,8 @@ env_path = Path(__file__).parent / ".env"
 load_dotenv(dotenv_path=env_path)
 
 app = Flask(__name__)
+app.json_encoder = JSONEncoder
+
 
 # --- Variables de Entorno ---
 ATLAS_URI = os.getenv('MONGODB_ATLAS_URI')
@@ -116,15 +130,14 @@ def index():
     return render_template('index.html')
 
 
-
 @app.route('/TestInsert')
 def test_insert():
     try:
-        # Simulación de datos de prueba
+        # Datos simulados con datetime directo (lo manejamos en JSONEncoder)
         sensores = [
-            {"codigosensor": 1, "estado": 1, "TipoEjecucion": datetime.now().isoformat()},
-            {"codigosensor": 2, "estado": 0, "TipoEjecucion": datetime.now().isoformat()},
-            {"codigosensor": 3, "estado": 1, "TipoEjecucion": datetime.now().isoformat()},
+            {"codigosensor": 1, "estado": 1, "TipoEjecucion": datetime.now()},
+            {"codigosensor": 2, "estado": 0, "TipoEjecucion": datetime.now()},
+            {"codigosensor": 3, "estado": 1, "TipoEjecucion": datetime.now()},
         ]
 
         colecciones = {
@@ -137,81 +150,114 @@ def test_insert():
 
         for sensor in sensores:
             resultado = colecciones[sensor["codigosensor"]].insert_one(sensor)
+
             insertados.append({
                 "coleccion": colecciones[sensor["codigosensor"]].name,
-                "insertado_id": str(resultado.inserted_id),
+                "insertado_id": resultado.inserted_id,
                 "documento": sensor
             })
 
-        return jsonify({
+        # ✅ Serialización 100 % segura
+        respuesta = {
             "status": "ok",
             "mensaje": "Documentos insertados correctamente en Atlas",
             "detalles": insertados
-        }), 201
+        }
+
+        return Response(
+            json.dumps(respuesta, cls=JSONEncoder),
+            mimetype="application/json",
+            status=201
+        )
 
     except Exception as e:
         print(f"❌ Error al insertar: {e}")
-        return jsonify({"status": "error", "mensaje": str(e)}), 500
+        return Response(
+            json.dumps({"status": "error", "mensaje": str(e)}, cls=JSONEncoder),
+            mimetype="application/json",
+            status=500
+        )
+
+
+
+
+
+# --- Colecciones simuladas (ajusta según tus nombres reales) ---
+colecciones = {
+    1: db_atlas.Sensor_1,
+    2: db_atlas.Sensor_2,
+    3: db_atlas.Sensor_3
+}
+
+def serialize_mongo_doc(doc):
+    """
+    Convierte ObjectId y datetime a tipos serializables por JSON.
+    """
+    safe_doc = {}
+    for k, v in doc.items():
+        if isinstance(v, ObjectId):
+            safe_doc[k] = str(v)
+        elif isinstance(v, datetime):
+            safe_doc[k] = v.isoformat()
+        else:
+            safe_doc[k] = v
+    return safe_doc
 
 
 @app.route('/receive_sensor_data', methods=['POST'])
 def receive_sensor_data():
-    sensor1_collection = db_atlas.p1
-
-    if sensor1_collection is None:
-        return jsonify({"error": "La conexión a la base de datos no está establecida."}), 503
-
     try:
         data = request.get_json()
-        if not data:
-            return jsonify({"error": "No se proporcionó un payload JSON"}), 400
 
-        # 🔍 Log detallado de datos recibidos y sus tipos
-        print("📦 Datos recibidos del ESP32:")
-        for key, value in data.items():
-            print(f"   ➜ {key}: {value} (tipo: {type(value).__name__})")
+        if not data or "codigosensor" not in data:
+            return jsonify({"status": "error", "mensaje": "Falta el campo 'codigosensor'"}), 400
 
-        sensor_type = data.get('sensor_type')
-        value = data.get('value')
-        unit = data.get('unit', 'N/A')
+        codigosensor = int(data["codigosensor"])
 
-        if sensor_type is None or value is None:
-            return jsonify({"error": "Faltan campos obligatorios: 'sensor_type' o 'value'"}), 400
+        # Verificar que el código de sensor sea válido
+        if codigosensor not in colecciones:
+            return jsonify({"status": "error", "mensaje": "Código de sensor no válido"}), 400
 
-        # Documento a insertar
+        collection = colecciones[codigosensor]
+
+        print(f"📡 Recibido desde ESP32: {data}")
+
+        # Crear documento a insertar
         doc_to_insert = {
-            "sensor": sensor_type,
-            "valor": value,
-            "unidad": unit,
+            "codigosensor": codigosensor,
+            "sensor_type": data.get("sensor_type", "Desconocido"),
+            "valor": data.get("value"),
+            "unidad": data.get("unit", "N/A"),
             "timestamp": datetime.now()
         }
 
-        # Inserción en MongoDB
-        sensor1_collection.insert_one(doc_to_insert)
-        print("✅ Documento guardado exitosamente en MongoDB.")
+        # Insertar en MongoDB
+        resultado = collection.insert_one(doc_to_insert)
 
-        if "_id" in doc_to_insert:
-            del doc_to_insert["_id"]
+        # Añadir el ID al documento para devolverlo
+        doc_to_insert["_id"] = resultado.inserted_id
 
+        # Serializar campos no compatibles (ObjectId, datetime)
+        safe_doc = serialize_mongo_doc(doc_to_insert)
 
-        # Convertir datetime a ISO para que sea legible en JSON
-        safe_doc = {
-            k: (v.isoformat() if isinstance(v, datetime) else v)
-            for k, v in doc_to_insert.items()
-        }
+        print(f"✅ Insertado en {collection.name} con ID {safe_doc['_id']}")
 
         return jsonify({
-            "status": "success",
-            "message": "Dato de sensor recibido y guardado exitosamente.",
-            "data_received": safe_doc
+            "status": "ok",
+            "mensaje": "Dato insertado correctamente",
+            "coleccion": collection.name,
+            "documento": safe_doc
         }), 201
 
     except Exception as e:
-        print(f"❌ Error al procesar los datos del sensor: {e}")
-        return jsonify({"status": "error", "message": f"Error interno del servidor: {e}"}), 500
+        print(f"❌ Error al procesar datos: {e}")
+        return jsonify({
+            "status": "error",
+            "mensaje": str(e)
+        }), 500
 
 
-    
+
 @app.route('/tabla')
 def tabla():
     usuarios = list(db_atlas.p1.find({}, {"_id": 0}))

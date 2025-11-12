@@ -8,7 +8,8 @@ import random
 WIFI_SSID = 'Wokwi-GUEST'
 WIFI_PASS = ''
 
-SERVER_URL = 'https://proyecto-class-pa-final.onrender.com/receive_sensor_data/'
+SERVER_URL = "https://8423ecfd-f092-4e20-8fab-219d18f035e6-00-25frin13h2g1f.spock.replit.dev/receive_sensor_data"
+
 
 
 def connect_wifi():
@@ -18,7 +19,7 @@ def connect_wifi():
     if not wlan.isconnected():
         print(f'Conectando a red: {WIFI_SSID}')
         wlan.connect(WIFI_SSID, WIFI_PASS)
-        timeout = 10
+        timeout = 30
         while not wlan.isconnected() and timeout > 0:
             time.sleep(1)
             print('.')
