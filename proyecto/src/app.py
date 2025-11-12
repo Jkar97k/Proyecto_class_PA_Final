@@ -175,6 +175,10 @@ def receive_sensor_data():
         sensor1_collection.insert_one(doc_to_insert)
         print("✅ Documento guardado exitosamente en MongoDB.")
 
+        if "_id" in doc_to_insert:
+            del doc_to_insert["_id"]
+
+
         # Convertir datetime a ISO para que sea legible en JSON
         safe_doc = {
             k: (v.isoformat() if isinstance(v, datetime) else v)
