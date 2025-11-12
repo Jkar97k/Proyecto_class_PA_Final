@@ -1,13 +1,18 @@
+# Imagen base
 FROM python:3.12.3-slim
 
+# Directorio de trabajo
 WORKDIR /app
 
+# Copiar requirements y instalar dependencias
 COPY requirements.txt .
-
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Copiar el resto del código
 COPY . .
 
+# Exponer puerto donde Flask escuchará
 EXPOSE 5000
 
-CMD ["flask","run","--host=0.0.0.0"]
+# Comando por defecto para ejecutar Flask
+CMD ["flask", "run", "--host=0.0.0.0"]

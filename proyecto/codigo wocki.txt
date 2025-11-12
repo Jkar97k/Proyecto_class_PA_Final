@@ -104,3 +104,98 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+import network
+import urequests
+import ujson
+import time
+import random
+
+# --- CONFIGURACIÓN ---
+WIFI_SSID = 'Wokwi-GUEST'
+WIFI_PASS = ''
+SERVER_URL = "https://8423ecfd-f092-4e20-8fab-219d18f035e6-00-25frin13h2g1f.spock.replit.dev/receive_sensor_data"
+
+
+# --- CONECTAR WIFI ---
+def connect_wifi():
+    wlan = network.WLAN(network.STA_IF)
+    wlan.active(True)
+    if not wlan.isconnected():
+        print('🔌 Conectando a WiFi...')
+        wlan.connect(WIFI_SSID, WIFI_PASS)
+        timeout = 60
+        while not wlan.isconnected() and timeout > 0:
+            print('.', end='')
+            time.sleep(1)
+            timeout -= 1
+        print()
+    if wlan.isconnected():
+        print('✅ WiFi Conectado')
+        print('Configuración de red:', wlan.ifconfig())
+        return True
+    else:
+        print('❌ No se pudo conectar a WiFi')
+        return False
+
+
+# --- GENERAR HORA ALEATORIA (ISO) ---
+def hora_random_iso():
+    """Devuelve la fecha actual con hora/minuto/segundo aleatorios en formato ISO."""
+    t = time.localtime()
+    random_hour = random.randint(0, 23)
+    random_min = random.randint(0, 59)
+    random_sec = random.randint(0, 59)
+    fecha = "%04d-%02d-%02dT%02d:%02d:%02d" % (t[0], t[1], t[2], random_hour, random_min, random_sec)
+    return fecha
+
+
+# --- ENVIAR DATOS ---
+def send_sensor_data(sensor_id):
+    """Envía los datos simulados de un sensor."""
+    estado = random.choice([0, 1])
+    tipo_ejecucion = hora_random_iso()
+
+    payload = {
+        "codigosensor": sensor_id,
+        "estado": estado,
+        "TipoEjecucion": tipo_ejecucion
+    }
+
+    print("\n📤 Enviando Sensor", sensor_id, "->", payload)
+
+    try:
+        headers = {'Content-Type': 'application/json'}
+        response = urequests.post(SERVER_URL, data=ujson.dumps(payload), headers=headers)
+
+        if response.status_code == 201:
+            print("✅ Sensor", sensor_id, "guardado correctamente en MongoDB")
+        else:
+            print("⚠️ Error:", response.status_code, response.text)
+
+        response.close()
+
+    except Exception as e:
+        print("❌ Error al enviar datos:", e)
+
+
+# --- LOOP PRINCIPAL ---
+def main():
+    if connect_wifi():
+        while True:
+            for sensor_id in range(1, 4):  # Tres sensores
+                send_sensor_data(sensor_id)
+                time.sleep(1)  # pequeña pausa entre sensores
+
+            print("\n⏱ Esperando 15 segundos antes del siguiente envío...\n")
+            time.sleep(15)
+
+
+# --- EJECUTAR ---
+main()
+
+# proxy https://replit.com/@jgarcia861/ProxySensorData
+
+
+
+docker compose down -v --remove-orphans

@@ -1,9 +1,8 @@
-name: src
-
 services:
   # 🧩 Flask API
   flask_app:
     build:
+      context: ./src
       dockerfile: Dockerfile
     container_name: mi-flask-api
     depends_on:
@@ -60,29 +59,32 @@ services:
       ME_CONFIG_BASICAUTH_USERNAME: ${ME_CONFIG_BASICAUTH_USERNAME}
       ME_CONFIG_BASICAUTH_PASSWORD: ${ME_CONFIG_BASICAUTH_PASSWORD}
     ports:
-      - "8082:8081"  # distinto puerto local
+      - "8082:8081"
     networks:
       - mongito-net
     restart: always
 
+  # 🧩 Grafana
   grafana:
-    image: grafana/grafana-oss:latest  # <-- ¡ASEGÚRATE DE QUE ESTÉ ASÍ!
+    image: grafana/grafana-oss:latest
     container_name: grafana
     ports:
       - "3000:3000"
     restart: always
     environment:
-      - GF_INSTALL_PLUGINS=grafana-mongodb-datasource 
+      - GF_INSTALL_PLUGINS=grafana-mongodb-datasource
       - GF_SECURITY_ALLOW_EMBEDDING=true
     volumes:
       - grafana-storage:/var/lib/grafana
     networks:
       - mongito-net
     depends_on:
-      - mongo_db++++++++++   
+      - mongo_db
 
+# Redes y volúmenes
 networks:
   mongito-net:
 
 volumes:
   mongo-data:
+  grafana-storage:
