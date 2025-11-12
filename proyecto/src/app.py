@@ -78,8 +78,8 @@ def check_db_status():
         try:
             db_atlas.command('ping')
             status['atlas'] = {"status": "ok", "db": db_atlas.name}
-        except Exception:
-            status['atlas'] = {"status": "error", "message": "Conexión Atlas perdida. (Verificar IP y credenciales)"}
+        except Exception as e:
+            status['atlas'] = {"status": "error", "message": str(e)}
     else:
         status['atlas'] = {"status": "error", "message": "Atlas no inicializado."}
 
@@ -88,20 +88,16 @@ def check_db_status():
         try:
             db_local.command('ping')
             status['local'] = {"status": "ok", "db": db_local.name}
-        except Exception:
-            status['local'] = {"status": "error", "message": "Conexión Local perdida. (Verificar servicio 'mongo_db')"}
+        except Exception as e:
+            status['local'] = {"status": "error", "message": str(e)}
     else:
         status['local'] = {"status": "error", "message": "Local no inicializado."}
 
-    
-    safe_doc = {k: (str(v) if isinstance(v, datetime) else v) for k, v in doc_to_insert.items()}
-
     return jsonify({
         "status": "success",
-        "message": "Dato de sensor recibido y guardado exitosamente.",
-        "id_mongo": str(result.inserted_id),
-        "data_received": safe_doc
-    }), 201
+        "connections": status
+    }), 200
+
 
 # Ejemplo de ruta que realiza operaciones en ambas bases de datos
 @app.route('/vamos')
