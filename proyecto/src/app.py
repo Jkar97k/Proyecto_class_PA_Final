@@ -255,26 +255,57 @@ def receive_sensor_data():
         }), 500
 
 #grafana 
-
 @app.route('/LeerSensores', methods=['GET'])
 def obtener_datos_sensores():
     try:
-        # Accedemos a las colecciones de los tres sensores
         colecciones = [db_atlas.Sensor_1, db_atlas.Sensor_2, db_atlas.Sensor_3]
-
         datos_totales = []
+
         for col in colecciones:
-            # Tomar los últimos 10 registros de cada sensor
+            nombre_sensor = col.name
             docs = list(col.find().sort("_id", -1).limit(10))
 
-            # Serializar los ObjectId y datetime
             for d in docs:
+                # Serializar ObjectId
                 d["_id"] = str(d["_id"])
+
+                # Serializar datetime
                 if "TipoEjecucion" in d and hasattr(d["TipoEjecucion"], "isoformat"):
                     d["TipoEjecucion"] = d["TipoEjecucion"].isoformat()
 
-            datos_totales.extend(docs)
+                # Normalizar campo timestamp
+                if "TipoEjecucion" in d:
+                    try:
+                        fecha = datetime.fromisoformat(d["TipoEjecucion"])
+                    except Exception:
+                        fecha = datetime.now()
+                else:
+                    fecha = datetime.now()
 
+                # Añadimos el valor, timestamp y nombre del sensor
+                datos_totales.append({
+                    "sensor": nombre_sensor,
+                    "valor": d.get("estado", d.get("valor", 0)),
+                    "timestamp": int(time.mktime(fecha.timetuple()) * 1000)
+                })
+
+        # 🔍 Detección automática si el request viene de Grafana
+        if "grafana" in request.args:
+            # Devuelve formato "time series"
+            series = {}
+            for item in datos_totales:
+                sensor = item["sensor"]
+                if sensor not in series:
+                    series[sensor] = []
+                series[sensor].append([item["valor"], item["timestamp"]])
+
+            grafana_format = [
+                {"target": sensor, "datapoints": points}
+                for sensor, points in series.items()
+            ]
+            return jsonify(grafana_format), 200
+
+        # 🧩 Formato normal (para navegador o pruebas)
         return jsonify({
             "status": "ok",
             "total_registros": len(datos_totales),
