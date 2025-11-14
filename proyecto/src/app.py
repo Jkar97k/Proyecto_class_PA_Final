@@ -1,21 +1,22 @@
 import os
+import json
 import time
-from flask import Flask, render_template, request, jsonify,Response
+from pathlib import Path
+from datetime import datetime# Se añadió 'timezone' para usar en la ruta /query
+from bson import ObjectId
 from pymongo import MongoClient
 from dotenv import load_dotenv
-from pathlib import Path
-from datetime import datetime
-from bson import ObjectId
-import json
 
+from flask import Flask, render_template, request, jsonify, Response
 
-# --- Serializador JSON personalizado para manejar ObjectId de MongoDB ---
+# --- Serializador JSON personalizado para manejar ObjectId y datetime ---
 class JSONEncoder(json.JSONEncoder):
     def default(self, o):
         if isinstance(o, ObjectId):
             return str(o)
         if isinstance(o, datetime):
-            return o.isoformat()  # convierte datetime a string legible
+            # Convierte datetime a string legible
+            return o.isoformat()
         return super().default(o)
 
 
@@ -24,6 +25,7 @@ env_path = Path(__file__).resolve().parent.parent / ".env"
 load_dotenv(dotenv_path=env_path)
 
 app = Flask(__name__)
+# Aplicar el encoder personalizado a la aplicación Flask
 app.json_encoder = JSONEncoder
 
 
@@ -31,7 +33,7 @@ app.json_encoder = JSONEncoder
 ATLAS_URI = os.getenv('MONGODB_ATLAS_URI')
 LOCAL_URI = os.getenv('MONGODB_LOCAL_URI')
 
-# --- Variables globales ---
+# --- Variables globales de Conexión y Colecciones ---
 client_atlas = None
 client_local = None
 db_atlas = None
@@ -39,12 +41,14 @@ db_local = None
 sensor1_collection = None
 sensor2_collection = None
 sensor3_collection = None
+COLECCIONES_MAP = {} # Mapa para Grafana
 
 
 def init_mongodb_connection():
     """Inicializa la conexión a MongoDB Atlas y Local."""
     global client_atlas, client_local, db_atlas, db_local
     global sensor1_collection, sensor2_collection, sensor3_collection
+    global COLECCIONES_MAP
 
     ATLAS_CONNECTION_OPTS = {'serverSelectionTimeoutMS': 5000, 'uuidRepresentation': 'standard'}
 
@@ -55,15 +59,22 @@ def init_mongodb_connection():
             client_atlas.admin.command('ping')
             db_atlas = client_atlas.get_database("DatosSensores")
 
-            # Colecciones específicas
+            # Colecciones específicas de Grafana/Sensores
             sensor1_collection = db_atlas["Sensor_1"]
             sensor2_collection = db_atlas["Sensor_2"]
             sensor3_collection = db_atlas["Sensor_3"]
 
+            # Llenar el mapa para Grafana
+            COLECCIONES_MAP = {
+                "Sensor_1": sensor1_collection,
+                "Sensor_2": sensor2_collection,
+                "Sensor_3": sensor3_collection,
+            }
+
             print(f"✅ Conexión ATLAS exitosa. Base de datos: {db_atlas.name}")
-            print(f"   ├─ Colección 1: {sensor1_collection.name}")
-            print(f"   ├─ Colección 2: {sensor2_collection.name}")
-            print(f"   └─ Colección 3: {sensor3_collection.name}")
+            print(f"   ├─ Colección 1: {sensor1_collection.name}")
+            print(f"   ├─ Colección 2: {sensor2_collection.name}")
+            print(f"   └─ Colección 3: {sensor3_collection.name}")
 
         except Exception as e:
             print(f"❌ Error de conexión a MongoDB ATLAS: {e}")
@@ -83,16 +94,19 @@ def init_mongodb_connection():
 init_mongodb_connection()
 
 
+# --------------------------------------------------------
+#               RUTAS DE PRUEBA Y DATOS RAW
+# --------------------------------------------------------
 
-# --- Ruta de prueba: realiza operaciones en Atlas y en la BD local ---
 @app.route('/vamos')
 def vamos():
+    """Ruta de prueba de operaciones en Atlas y Local."""
     message_atlas = "❌ No conectado a Atlas"
     message_local = "❌ No conectado a la BD local"
 
     try:
         # --- Operación en MongoDB Atlas ---
-        if db_atlas:
+        if db_atlas is not None:
             log_doc = {
                 "message": "Operación Flask en MongoDB Atlas (DatosSensores)",
                 "timestamp": datetime.now().isoformat()
@@ -100,8 +114,8 @@ def vamos():
             db_atlas["Log_Operaciones"].insert_one(log_doc)
             message_atlas = f"✅ Documento insertado en {db_atlas.name}.Colección: Log_Operaciones"
 
-        # --- Operación en MongoDB Local ---
-        if db_local:
+        # --- Operación en MongoDB Local (si está conectada) ---
+        if db_local is not None:
             db_local.local_data.update_one(
                 {"_id": "contador"},
                 {"$inc": {"count": 1}, "$set": {"last_update": datetime.now().isoformat()}},
@@ -124,26 +138,27 @@ def vamos():
             "message": f"Error interno: {e}"
         }), 500
 
-@app.route('/')
-def ruta():
-    return 'Mi primer hola mundo'
 
 @app.route('/index')
-def index():
+def template_index():
     return render_template('index.html')
 
 
 @app.route('/TestInsert')
 def test_insert():
+    """Inserta datos de prueba en las colecciones de sensores."""
     try:
-        # Datos simulados con datetime directo (lo manejamos en JSONEncoder)
+        if db_atlas is None:
+
+            return jsonify({"status": "error", "mensaje": "No hay conexión a Atlas"}), 500
+
         sensores = [
             {"codigosensor": 1, "estado": 1, "TipoEjecucion": datetime.now()},
             {"codigosensor": 2, "estado": 0, "TipoEjecucion": datetime.now()},
             {"codigosensor": 3, "estado": 1, "TipoEjecucion": datetime.now()},
         ]
 
-        colecciones = {
+        colecciones_insert = {
             1: db_atlas.Sensor_1,
             2: db_atlas.Sensor_2,
             3: db_atlas.Sensor_3
@@ -152,15 +167,14 @@ def test_insert():
         insertados = []
 
         for sensor in sensores:
-            resultado = colecciones[sensor["codigosensor"]].insert_one(sensor)
+            resultado = colecciones_insert[sensor["codigosensor"]].insert_one(sensor)
 
             insertados.append({
-                "coleccion": colecciones[sensor["codigosensor"]].name,
+                "coleccion": colecciones_insert[sensor["codigosensor"]].name,
                 "insertado_id": resultado.inserted_id,
                 "documento": sensor
             })
 
-        # ✅ Serialización 100 % segura
         respuesta = {
             "status": "ok",
             "mensaje": "Documentos insertados correctamente en Atlas",
@@ -181,15 +195,6 @@ def test_insert():
             status=500
         )
 
-#------------------------wokwi----------------------------
-
-# --- Colecciones simuladas (ajusta según tus nombres reales) ---
-colecciones = {
-    1: db_atlas.Sensor_1,
-    2: db_atlas.Sensor_2,
-    3: db_atlas.Sensor_3
-}
-
 def serialize_mongo_doc(doc):
     """
     Convierte ObjectId y datetime a tipos serializables por JSON.
@@ -207,7 +212,12 @@ def serialize_mongo_doc(doc):
 
 @app.route('/receive_sensor_data', methods=['POST'])
 def receive_sensor_data():
+    """Ruta para recibir datos JSON desde un ESP32 o dispositivo IoT."""
     try:
+        if db_atlas is None:
+
+            return jsonify({"status": "error", "mensaje": "No hay conexión a Atlas"}), 500
+
         data = request.get_json()
 
         if not data or "codigosensor" not in data:
@@ -215,11 +225,15 @@ def receive_sensor_data():
 
         codigosensor = int(data["codigosensor"])
 
-        # Verificar que el código de sensor sea válido
-        if codigosensor not in colecciones:
+        # Usamos el mapa COLECCIONES_MAP ya que contiene las referencias correctas
+        if codigosensor == 1:
+            collection = COLECCIONES_MAP.get("Sensor_1")
+        elif codigosensor == 2:
+            collection = COLECCIONES_MAP.get("Sensor_2")
+        elif codigosensor == 3:
+            collection = COLECCIONES_MAP.get("Sensor_3")
+        else:
             return jsonify({"status": "error", "mensaje": "Código de sensor no válido"}), 400
-
-        collection = colecciones[codigosensor]
 
         print(f"📡 Recibido desde ESP32: {data}")
 
@@ -257,74 +271,105 @@ def receive_sensor_data():
             "mensaje": str(e)
         }), 500
 
-#grafana 
-@app.route('/LeerSensores', methods=['GET'])
-def obtener_datos_sensores():
-    try:
-        colecciones = [db_atlas.Sensor_1, db_atlas.Sensor_2, db_atlas.Sensor_3]
-        datos_totales = []
-
-        for col in colecciones:
-            nombre_sensor = col.name
-            docs = list(col.find().sort("_id", -1).limit(10))
-
-            for d in docs:
-                # Serializar ObjectId
-                d["_id"] = str(d["_id"])
-
-                # Serializar datetime
-                if "TipoEjecucion" in d and hasattr(d["TipoEjecucion"], "isoformat"):
-                    d["TipoEjecucion"] = d["TipoEjecucion"].isoformat()
-
-                # Normalizar campo timestamp
-                if "TipoEjecucion" in d:
-                    try:
-                        fecha = datetime.fromisoformat(d["TipoEjecucion"])
-                    except Exception:
-                        fecha = datetime.now()
-                else:
-                    fecha = datetime.now()
-
-                # Añadimos el valor, timestamp y nombre del sensor
-                datos_totales.append({
-                    "sensor": nombre_sensor,
-                    "valor": d.get("estado", d.get("valor", 0)),
-                    "timestamp": int(time.mktime(fecha.timetuple()) * 1000)
-                })
-
-        # 🔍 Detección automática si el request viene de Grafana
-        if "grafana" in request.args:
-            # Devuelve formato "time series"
-            series = {}
-            for item in datos_totales:
-                sensor = item["sensor"]
-                if sensor not in series:
-                    series[sensor] = []
-                series[sensor].append([item["valor"], item["timestamp"]])
-
-            grafana_format = [
-                {"target": sensor, "datapoints": points}
-                for sensor, points in series.items()
-            ]
-            return jsonify(grafana_format), 200
-
-        # 🧩 Formato normal (para navegador o pruebas)
-        return jsonify({
-            "status": "ok",
-            "total_registros": len(datos_totales),
-            "datos": datos_totales
-        }), 200
-
-    except Exception as e:
-        print(f"❌ Error al obtener datos: {e}")
-        return jsonify({"status": "error", "mensaje": str(e)}), 500
-
 
 @app.route('/tabla')
 def tabla():
+    """Muestra una tabla (asumiendo que db_atlas.p1 existe)."""
+    # Nota: Asegúrate de que db_atlas.p1 exista
+    if db_atlas is None:
+         return "Error: No conectado a Atlas para la ruta /tabla", 503
     usuarios = list(db_atlas.p1.find({}, {"_id": 0}))
     return render_template('tabla.html', usuarios=usuarios)
 
+
+# --------------------------------------------------------
+#              RUTAS GRAFANA JSON DATA SOURCE
+# --------------------------------------------------------
+
+# 1. Health Check (Ruta de prueba de conexión)
+@app.route('/', methods=['GET'])
+def grafana_health_check():
+    """Ruta de verificación de salud de Grafana."""
+    # Verificamos si al menos la conexión a Atlas fue exitosa
+    if client_atlas is not None:
+        return "OK", 200
+    else:
+        return "Database Connection Error", 503
+
+# 2. Search (Descubrimiento de métricas)
+@app.route('/search', methods=['POST'])
+def search():
+    """Devuelve la lista de métricas disponibles para la consulta."""
+    # Devuelve las claves del mapa (los nombres de los sensores)
+    return jsonify(list(COLECCIONES_MAP.keys()))
+# 3. Query (Consulta de datos)
+@app.route('/query', methods=['POST'])
+def query():
+    try:
+        req = request.get_json(silent=True) or {}
+        target = req.get("target", "*")
+
+        colecciones = {
+            "Sensor_1": db_atlas.Sensor_1,
+            "Sensor_2": db_atlas.Sensor_2,
+            "Sensor_3": db_atlas.Sensor_3
+        }
+
+        respuesta = []
+
+        for nombre, col in colecciones.items():
+
+            # Si Grafana pide un target específico
+            if target != "*" and target != nombre:
+                continue
+
+            docs = list(col.find({}, {"_id": 0}))
+
+            datapoints = []
+            for d in docs:
+                
+                # ------------------------------
+                # 1. Valor numérico
+                # ------------------------------
+                valor = d.get("Valor")
+                if valor is None:
+                    valor = 0
+                else:
+                    valor = float(valor)
+
+                # ------------------------------
+                # 2. Fecha -> timestamp UNIX ms
+                # ------------------------------
+                fecha = d.get("Fecha")
+
+                if fecha is None:
+                    ts = int(time.time() * 1000)
+                else:
+                    # Si es string
+                    if isinstance(fecha, str):
+                        try:
+                            dt = datetime.fromisoformat(fecha)
+                        except:  # noqa: E722
+                            dt = datetime.utcnow()
+                    else:
+                        dt = fecha
+
+                    ts = int(dt.timestamp() * 1000)
+
+                datapoints.append([valor, ts])
+
+            respuesta.append({
+                "target": nombre,
+                "datapoints": datapoints
+            })
+
+        return jsonify(respuesta)
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+
 if __name__ == '__main__':
-    # Usar el puerto 5000 (mapeado a 5000 por docker-compose) y host='0.0.0.0'
+    # Usar host='0.0.0.0' para que sea accesible externamente (como por Docker/Grafana)
     app.run(host='0.0.0.0', port=6001, debug=True)

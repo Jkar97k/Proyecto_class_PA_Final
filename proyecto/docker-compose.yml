@@ -12,7 +12,7 @@ services:
       MONGODB_ATLAS_URI: ${MONGODB_ATLAS_URI}
       MONGODB_LOCAL_URI: mongodb://${MONGO_LOCAL_USERNAME}:${MONGO_LOCAL_PASSWORD}@mongo_db:${MONGO_LOCAL_PORT}/${MONGO_LOCAL_DB}?authSource=admin
     ports:
-      - "5001:5000"
+      - "6001:5000"
     networks:
       - mongito-net
     restart: always
