@@ -2,12 +2,13 @@ import os
 import json
 import time
 from pathlib import Path
-from datetime import datetime# Se añadió 'timezone' para usar en la ruta /query
+from datetime import datetime,timezone# Se añadió 'timezone' para usar en la ruta /query
 from bson import ObjectId
+from dateutil import parser
 from pymongo import MongoClient
 from dotenv import load_dotenv
+from flask import request, jsonify,Flask, render_template,Response
 
-from flask import Flask, render_template, request, jsonify, Response
 
 # --- Serializador JSON personalizado para manejar ObjectId y datetime ---
 class JSONEncoder(json.JSONEncoder):
@@ -302,70 +303,71 @@ def search():
     """Devuelve la lista de métricas disponibles para la consulta."""
     # Devuelve las claves del mapa (los nombres de los sensores)
     return jsonify(list(COLECCIONES_MAP.keys()))
+
 # 3. Query (Consulta de datos)
 @app.route('/query', methods=['POST'])
-def query():
+def query_json_api_format():
     try:
-        req = request.get_json(silent=True) or {}
-        target = req.get("target", "*")
-
+        # Nota: El plugin JSON API puede o no enviar 'range' y 'targets' de la misma manera.
+        # Asumiremos que aún quieres filtrar por tiempo.
+        req = request.get_json(silent=True)
+        
+        # --- (Manejo de Rango de Tiempo y Colecciones, si es necesario) ---
+        # ... (Tu lógica para obtener time_from y time_to) ...
+        
         colecciones = {
             "Sensor_1": db_atlas.Sensor_1,
             "Sensor_2": db_atlas.Sensor_2,
             "Sensor_3": db_atlas.Sensor_3
         }
 
-        respuesta = []
+        respuesta_tabular = [] # <-- La respuesta ahora será una lista simple de todos los documentos
 
-        for nombre, col in colecciones.items():
+        # En el plugin JSON API, a menudo se ignora 'targets' o se usa para un solo endpoint.
+        # Iremos a buscar TODOS los datos de los sensores para el rango de tiempo (si lo usas).
+        
+        # Iterar sobre las colecciones y obtener datos filtrados por tiempo (si aplica)
+        for nombre_sensor, col in colecciones.items():
+            
+            # Ejemplo de filtro (ajusta según la necesidad del plugin JSON API)
+            # docs = col.find(query_filter, ...).sort("Fecha", 1) 
+            docs = col.find({}, {"Valor": 1, "Fecha": 1, "_id": 0}) # Consulta sin filtro de tiempo simple
 
-            # Si Grafana pide un target específico
-            if target != "*" and target != nombre:
-                continue
-
-            docs = list(col.find({}, {"_id": 0}))
-
-            datapoints = []
             for d in docs:
-                
-                # ------------------------------
-                # 1. Valor numérico
-                # ------------------------------
                 valor = d.get("Valor")
-                if valor is None:
-                    valor = 0
-                else:
-                    valor = float(valor)
-
-                # ------------------------------
-                # 2. Fecha -> timestamp UNIX ms
-                # ------------------------------
                 fecha = d.get("Fecha")
+                
+                # Conversión de Valor
+                try:
+                    valor_float = float(valor) if valor is not None else 0.0
+                except ValueError:
+                    valor_float = 0.0
 
-                if fecha is None:
-                    ts = int(time.time() * 1000)
-                else:
-                    # Si es string
-                    if isinstance(fecha, str):
-                        try:
-                            dt = datetime.fromisoformat(fecha)
-                        except:  # noqa: E722
-                            dt = datetime.utcnow()
-                    else:
-                        dt = fecha
+                # Conversión de Fecha a formato ISO 8601 (string)
+                time_str = None
+                if isinstance(fecha, datetime):
+                    # Aseguramos que la fecha esté en UTC y sea ISO 8601
+                    time_str = fecha.astimezone(timezone.utc).isoformat()
+                elif isinstance(fecha, str):
+                    try:
+                        # Parsear y luego convertir a ISO 8601
+                        dt = parser.parse(fecha)
+                        time_str = dt.astimezone(timezone.utc).isoformat()
+                    except: # noqa: E722
+                        continue
 
-                    ts = int(dt.timestamp() * 1000)
+                # ⚠️ Agregar el documento al array en formato tabular
+                if time_str:
+                    respuesta_tabular.append({
+                        "sensor_name": nombre_sensor, # Clave para la etiqueta de la serie
+                        "time": time_str,            # Clave para el eje X
+                        "value": valor_float         # Clave para el eje Y
+                    })
 
-                datapoints.append([valor, ts])
-
-            respuesta.append({
-                "target": nombre,
-                "datapoints": datapoints
-            })
-
-        return jsonify(respuesta)
+        return jsonify(respuesta_tabular)
 
     except Exception as e:
+        print(f"Error en el endpoint /query (JSON API Format): {e}")
         return jsonify({"error": str(e)}), 500
 
 
