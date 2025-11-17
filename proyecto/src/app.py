@@ -216,6 +216,7 @@ def serialize_mongo_doc(doc):
             safe_doc[k] = v
     return safe_doc
 
+
 @app.route('/receive_sensor_data', methods=['POST'])
 def receive_sensor_data():
     """
@@ -240,13 +241,27 @@ def receive_sensor_data():
         # 2. Manejar el tiempo: Usar el tiempo simulado o el tiempo real del servidor.
         simulated_time_ms = data.get("simulated_timestamp_ms")
         if simulated_time_ms is not None:
-            # Convertir milisegundos de Unix Epoch (desde Wokwi) a objeto datetime
-            # 🎯 FIX para reloj de sistema incorrecto:
-            # Usamos utcfromtimestamp para obtener una fecha UTC "naive" (ignora el reloj local del servidor)
-            timestamp_naive_utc = datetime.utcfromtimestamp(simulated_time_ms / 1000)
-            # Luego la hacemos "aware" (consciente) de UTC.
-            timestamp_to_use = timestamp_naive_utc.replace(tzinfo=timezone.utc)
-            print(f"⏰ Usando tiempo simulado (2025): {timestamp_to_use.isoformat()}")
+            # Convertir milisegundos de Unix Epoch (desde Wokwi) a segundos Epoch
+            epoch_seconds = simulated_time_ms / 1000
+            
+            # Convertir a datetime UTC
+            timestamp_naive_utc = datetime.utcfromtimestamp(epoch_seconds)
+            
+            # 🎯 FIX EXPLÍCITO: Forzar el año a 2025 si la conversión salió mal (problema de reloj del servidor)
+            if timestamp_naive_utc.year < 2025:
+                # Si el reloj del servidor está atrasado, corregimos el año.
+                target_year = 2025
+                
+                # Usamos replace para crear el nuevo objeto datetime con el año corregido
+                timestamp_to_use = timestamp_naive_utc.replace(year=target_year, tzinfo=timezone.utc)
+                print(f"⚠️ Año corregido de {timestamp_naive_utc.year} a {target_year} para dato simulado.")
+            else:
+                # Si ya es 2025 o posterior, solo lo hacemos UTC aware
+                timestamp_to_use = timestamp_naive_utc.replace(tzinfo=timezone.utc)
+            
+            # -------------------------------------------------------------------------------------
+
+            print(f"⏰ Usando tiempo simulado (Final): {timestamp_to_use.isoformat()}")
         else:
             # Fallback: usar el tiempo real del servidor (ahora también UTC aware)
             timestamp_to_use = datetime.now(timezone.utc)
@@ -279,7 +294,7 @@ def receive_sensor_data():
         doc_to_insert = {
             "codigosensor": codigosensor,
             "estado": estado, 
-            "timestamp": timestamp_to_use # <-- USANDO TIEMPO SIMULADO O REAL
+            "timestamp": timestamp_to_use # <-- USANDO TIEMPO SIMULADO O REAL Y CORREGIDO
         }
 
         # Insertar en MongoDB
