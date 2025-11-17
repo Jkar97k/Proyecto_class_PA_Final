@@ -4,6 +4,7 @@ import random
 import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+from collections import defaultdict # Para agrupar los resultados
 
 from bson.objectid import ObjectId
 from dateutil import parser
@@ -316,11 +317,11 @@ def test_connection():
 # ----------------------------------------------------------------------
 
 @app.route('/query', methods=['GET'])
-def park_query():
+def query():
     """
-    Consulta los datos crudos (RAW) de las colecciones de sensores para
-    devolverlos a Grafana Infinity, filtrados por rango de tiempo.
-    El resultado usa el formato plano requerido por Grafana Infinity.
+    Consulta los datos crudos (RAW) de las colecciones de sensores,
+    filtrados por rango de tiempo, y los devuelve en el formato
+    clásico de Time Series de Grafana (target + datapoints).
     """
     
     # Obtener el rango de tiempo de Grafana
@@ -334,40 +335,46 @@ def park_query():
             start_time = parser.parse(start_str)
             end_time = parser.parse(end_str)
             
+            # Inicializar un diccionario para agrupar los datapoints por sensor/colección
+            # {'Sensor_1': [], 'Sensor_2': [], 'Sensor_3': []}
+            grouped_data = defaultdict(list)
+            
             # Lista de colecciones para consultar
             collections_to_query = [db_atlas["Sensor_1"], db_atlas["Sensor_2"], db_atlas["Sensor_3"]]
-            all_results = []
             
             # Criterio de filtrado (match)
             time_filter = {"timestamp": {"$gte": start_time, "$lte": end_time}}
             
             # 1. ITERAR Y OBTENER LOS DATOS CRUDOS DE CADA COLECCIÓN
             for collection in collections_to_query:
-                # Ejecutar la consulta simple (sin agregación)
-                cursor = collection.find(time_filter)
+                # Ejecutar la consulta simple (sin agregación), ordenado por tiempo
+                # Aunque el find() puede no estar ordenado, al iterar y agrupar es suficiente, 
+                # luego ordenaremos los datapoints individualmente.
+                cursor = collection.find(time_filter).sort([("timestamp", 1)])
                 
-                # 2. MAPEAR al formato plano requerido por Grafana Infinity
+                # 2. MAPEAR al formato [valor, timestamp_ms] y agrupar
                 for doc in cursor:
                     # Convertir el timestamp a milisegundos de Unix Epoch (formato requerido por Grafana)
-                    # El timestamp se convierte a UTC, luego a epoch time, y finalmente a milisegundos.
                     time_in_ms = int(doc['timestamp'].replace(tzinfo=timezone.utc).timestamp() * 1000)
                     
-                    all_results.append({
-                        # 'time' debe ser el timestamp en milisegundos
-                        "time": time_in_ms, 
-                        # 'value' es el estado del sensor (0 o 1)
-                        "value": doc['estado'], 
-                        # 'metric' es el nombre de la colección/sensor (usado para diferenciar series)
-                        "metric": collection.name,
-                        # Campos adicionales que pueden ser útiles en Tablas/Logs de Grafana
-                        "codigosensor": doc['codigosensor'],
-                    })
+                    # Formato [value, timestamp_ms]
+                    datapoint = [doc['estado'], time_in_ms] 
+                    
+                    # Agrupar por el nombre de la colección (que será el 'target' en Grafana)
+                    grouped_data[collection.name].append(datapoint)
             
-            # 3. ORDENAR todos los resultados por tiempo (aunque no es estrictamente necesario, es buena práctica)
-            all_results.sort(key=lambda x: x['time'])
+            # 3. CONSTRUIR LA RESPUESTA FINAL EN FORMATO DE SERIE DE TIEMPO DE GRAFANA
+            final_response = []
+            for target_name, datapoints in grouped_data.items():
+                final_response.append({
+                    "target": target_name,
+                    "datapoints": datapoints
+                })
 
-            print(f"✅ Consulta MongoDB: {len(all_results)} documentos crudos obtenidos y mapeados.")
-            return jsonify(all_results)
+            print(f"✅ Consulta MongoDB: {len(final_response)} series de tiempo generadas.")
+            # La respuesta está lista y sigue el formato estándar de Time Series.
+            print(final_response)
+            return jsonify(final_response)
             
         except Exception as e:
             error_msg = f"❌ Error crítico al consultar MongoDB: {e}"
@@ -379,5 +386,4 @@ def park_query():
     return jsonify({"status": "error", "message": "🚫 No hay conexión a MongoDB Atlas. Imposible obtener datos reales.", "results": []}), 503
 
 if __name__ == '__main__':
-    # Usar host='0.0.0.0' para que sea accesible externamente (como por Docker/Grafana)
     app.run(host='0.0.0.0', port=6001, debug=True)

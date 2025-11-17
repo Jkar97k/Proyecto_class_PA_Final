@@ -1,7 +1,7 @@
 import network
 import urequests
 import ujson
-import time
+import time # Usamos time, pero internamente es utime en MicroPython
 import random
 
 # --- CONFIGURACIÓN ---
@@ -11,6 +11,14 @@ WIFI_PASS = ''
 # ASUME que la URL que usaste en tu proxy es correcta.
 SERVER_URL = "https://8423ecfd-f092-4e20-8fab-219d18f035e6-00-25frin13h2g1f.spock.replit.dev/receive_sensor_data" 
 NUM_SENSORES = 3
+
+# --- VARIABLES DE SIMULACIÓN DE TIEMPO ---
+# Definir una hora de inicio en el pasado (e.g., 2025-10-01 00:00:00 UTC)
+# Epoch time para 2025-10-01 00:00:00 UTC es 1727788800 segundos.
+INITIAL_EPOCH_SECONDS = 1727788800
+# Almacenaremos el tiempo simulado en milisegundos (ms) para alta precisión
+current_sim_time_ms = INITIAL_EPOCH_SECONDS * 1000 
+iteration_counter = 0
 
 
 # --- CONECTAR WIFI ---
@@ -36,18 +44,23 @@ def connect_wifi():
 
 
 # --- ENVIAR DATOS ---
-def send_sensor_data(sensor_id):
-    """Envía los datos simulados de un sensor."""
+def send_sensor_data(sensor_id, current_timestamp_ms):
+    """Envía los datos simulados de un sensor con el timestamp simulado."""
     # 0 = Libre, 1 = Ocupado
     estado_ocupacion = random.choice([0, 1]) 
     
-    # 🎯 PAYLOAD AJUSTADO: Usa 'codigosensor' y 'estado' que es lo que app_proxy.py espera
+    # 🎯 PAYLOAD ACTUALIZADO: Incluye 'simulated_timestamp_ms'
     payload = {
-        "codigosensor": sensor_id, # El ID numérico (1, 2, 3)
-        "estado": estado_ocupacion,  # El estado (0 o 1)
+        "codigosensor": sensor_id,
+        "estado": estado_ocupacion,
+        "simulated_timestamp_ms": current_timestamp_ms # Nuevo campo
     }
 
-    print(f"\n📤 Enviando Sensor {payload['codigosensor']} -> {'OCUPADO' if estado_ocupacion else 'LIBRE'}")
+    # --- CORRECCIÓN MICROPYTHON: Usar el timestamp numérico en lugar de strftime ---
+    # La fecha legible ya no se genera aquí, solo se imprime el valor en ms.
+    
+    print(f"\n📤 Enviando Sensor {payload['codigosensor']} | Hora Sim (ms): {current_timestamp_ms} -> {'OCUPADO' if estado_ocupacion else 'LIBRE'}")
+    # ---------------------------------------------------------------------------------
 
     try:
         headers = {'Content-Type': 'application/json'}
@@ -67,15 +80,34 @@ def send_sensor_data(sensor_id):
 
 # --- LOOP PRINCIPAL ---
 def main():
+    global current_sim_time_ms
+    global iteration_counter
+    
     if connect_wifi():
         while True:
             print("-" * 30)
-            # Iteramos sobre los IDs de sensor 1, 2, 3
-            for sensor_id in range(1, NUM_SENSORES + 1): 
-                send_sensor_data(sensor_id)
-                time.sleep(0.5) # Pausa mínima
 
-            print("\n⏱ Esperando 10 segundos antes del siguiente envío...\n")
+            # 1. INCREMENTO HORARIO RANDOM (Cada iteración del loop principal)
+            # Agregar entre 1 y 4 horas al tiempo simulado (en ms)
+            # 1 hora = 3600 segundos * 1000 ms/s
+            hours_to_add = random.randint(1, 4) 
+            current_sim_time_ms += hours_to_add * 3600 * 1000 
+            
+            print(f"⌛ Incrementando hora simulada en {hours_to_add} horas.")
+            
+            # 2. INCREMENTO DIARIO (Cada dos iteraciones)
+            iteration_counter += 1
+            if iteration_counter % 2 == 0:
+                # 1 día = 24 horas * 3600 segundos/hora * 1000 ms/s
+                current_sim_time_ms += 24 * 3600 * 1000 
+                print("📅 Agregando un día extra a la simulación.")
+                
+            # Enviar datos con el nuevo timestamp simulado
+            for sensor_id in range(1, NUM_SENSORES + 1): 
+                send_sensor_data(sensor_id, current_sim_time_ms)
+                time.sleep(0.5) # Pausa mínima para que se vean los logs
+
+            print("\n⏱ Esperando 10 segundos antes del siguiente envío REAL...\n")
             time.sleep(5)
 
 
