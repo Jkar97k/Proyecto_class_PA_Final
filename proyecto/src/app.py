@@ -241,14 +241,16 @@ def receive_sensor_data():
         simulated_time_ms = data.get("simulated_timestamp_ms")
         if simulated_time_ms is not None:
             # Convertir milisegundos de Unix Epoch (desde Wokwi) a objeto datetime
-            # El tiempo de Python se basa en segundos, por lo que dividimos por 1000.
-            # Se usa timezone.utc para asegurar que la marca de tiempo es correcta.
-            timestamp_to_use = datetime.fromtimestamp(simulated_time_ms / 1000, tz=timezone.utc)
-            print(f"⏰ Usando tiempo simulado: {timestamp_to_use.isoformat()}")
+            # 🎯 FIX para reloj de sistema incorrecto:
+            # Usamos utcfromtimestamp para obtener una fecha UTC "naive" (ignora el reloj local del servidor)
+            timestamp_naive_utc = datetime.utcfromtimestamp(simulated_time_ms / 1000)
+            # Luego la hacemos "aware" (consciente) de UTC.
+            timestamp_to_use = timestamp_naive_utc.replace(tzinfo=timezone.utc)
+            print(f"⏰ Usando tiempo simulado (2025): {timestamp_to_use.isoformat()}")
         else:
-            # Fallback: usar el tiempo real del servidor (como antes)
-            timestamp_to_use = datetime.now() 
-            print("🕒 Usando tiempo real del servidor.")
+            # Fallback: usar el tiempo real del servidor (ahora también UTC aware)
+            timestamp_to_use = datetime.now(timezone.utc)
+            print("🕒 Usando tiempo real del servidor (UTC).")
 
         # 3. Validar y convertir a entero (0 o 1)
         try:
@@ -291,6 +293,7 @@ def receive_sensor_data():
 
         print(f"✅ Insertado en {collection.name} con ID {safe_doc['_id']}")
 
+        # La respuesta ahora debería tener el año 2025
         return jsonify({
             "status": "ok",
             "mensaje": "Dato insertado correctamente",
@@ -304,6 +307,7 @@ def receive_sensor_data():
             "status": "error",
             "mensaje": str(e)
         }), 500
+ 
         
 # 🎯 ENDPOINT 1: PRUEBA DE CONEXIÓN DE GRAFANA
 # ----------------------------------------------------------------------
