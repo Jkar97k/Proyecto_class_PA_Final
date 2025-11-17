@@ -200,6 +200,7 @@ def test_insert():
             status=500
         )
 
+
 def serialize_mongo_doc(doc):
     """
     Convierte ObjectId y datetime a tipos serializables por JSON.
@@ -214,12 +215,12 @@ def serialize_mongo_doc(doc):
             safe_doc[k] = v
     return safe_doc
 
-
 @app.route('/receive_sensor_data', methods=['POST'])
 def receive_sensor_data():
     """
     Ruta para recibir datos JSON desde un ESP32 o dispositivo IoT.
     Se asegura de que el estado de ocupación se guarde como 'estado' (0 o 1).
+    Acepta 'simulated_timestamp_ms' para guardar datos históricos.
     """
     try:
         if db_atlas is None:
@@ -235,7 +236,20 @@ def receive_sensor_data():
         # 1. Extraer el estado de ocupación. Se busca en 'estado' o 'value' (0 o 1).
         estado_raw = data.get("estado", data.get("value"))
         
-        # 2. Validar y convertir a entero (0 o 1)
+        # 2. Manejar el tiempo: Usar el tiempo simulado o el tiempo real del servidor.
+        simulated_time_ms = data.get("simulated_timestamp_ms")
+        if simulated_time_ms is not None:
+            # Convertir milisegundos de Unix Epoch (desde Wokwi) a objeto datetime
+            # El tiempo de Python se basa en segundos, por lo que dividimos por 1000.
+            # Se usa timezone.utc para asegurar que la marca de tiempo es correcta.
+            timestamp_to_use = datetime.fromtimestamp(simulated_time_ms / 1000, tz=timezone.utc)
+            print(f"⏰ Usando tiempo simulado: {timestamp_to_use.isoformat()}")
+        else:
+            # Fallback: usar el tiempo real del servidor (como antes)
+            timestamp_to_use = datetime.now() 
+            print("🕒 Usando tiempo real del servidor.")
+
+        # 3. Validar y convertir a entero (0 o 1)
         try:
             estado = int(estado_raw)
             if estado not in [0, 1]:
@@ -258,11 +272,11 @@ def receive_sensor_data():
 
         print(f"📡 Recibido desde ESP32: Sensor={codigosensor}, Estado={estado}")
 
-        # 3. Crear documento a insertar (Solo campos clave para la visualización)
+        # 4. Crear documento a insertar (usando el timestamp_to_use)
         doc_to_insert = {
             "codigosensor": codigosensor,
-            "estado": estado, # <-- CAMPO CLAVE PARA GRAFANA
-            "timestamp": datetime.now()
+            "estado": estado, 
+            "timestamp": timestamp_to_use # <-- USANDO TIEMPO SIMULADO O REAL
         }
 
         # Insertar en MongoDB
@@ -290,7 +304,6 @@ def receive_sensor_data():
             "mensaje": str(e)
         }), 500
         
-# ----------------------------------------------------------------------
 # 🎯 ENDPOINT 1: PRUEBA DE CONEXIÓN DE GRAFANA
 # ----------------------------------------------------------------------
 @app.route('/', methods=['GET'])
@@ -299,124 +312,72 @@ def test_connection():
     return 'OK', 200
 
 # ----------------------------------------------------------------------
-# 🎯 ENDPOINT 2: CONSULTA DE DATOS AGREGADOS PARA GRAFANA (NUEVO)
+# 🎯 ENDPOINT 2: CONSULTA DE DATOS AGREGADOS PARA GRAFANA (DATOS REALES)
 # ----------------------------------------------------------------------
+
 @app.route('/query', methods=['GET'])
 def park_query():
     """
-    Simula o ejecuta la consulta de agregación de datos de MongoDB para
-    mostrar la ocupación total del parking a lo largo del tiempo.
+    Consulta los datos crudos (RAW) de las colecciones de sensores para
+    devolverlos a Grafana Infinity, filtrados por rango de tiempo.
     El resultado usa el formato plano requerido por Grafana Infinity.
     """
     
-    # Grafana proporciona el rango de tiempo en milisegundos ISO (e.g., "2023-11-15T10:00:00.000Z")
-    # Usaremos estas claves para simular la filtración de datos históricos.
+    # Obtener el rango de tiempo de Grafana
     start_str = request.args.get('from', (datetime.now(timezone.utc) - timedelta(hours=6)).isoformat())
     end_str = request.args.get('to', datetime.now(timezone.utc).isoformat())
     
-    # -------------------------------------------------------------------
-    # ⚠️ LÓGICA DE AGREGACIÓN REAL EN MONGODB 
-    # -------------------------------------------------------------------
+    
     if db_atlas is not None:
         try:
             # Convertir las cadenas de tiempo de Grafana a objetos datetime de MongoDB
             start_time = parser.parse(start_str)
             end_time = parser.parse(end_str)
             
-            # NOTA: Para este pipeline, la agregación debe ocurrir sobre una colección 
-            # que contenga los datos de TODOS los sensores para obtener la ocupación TOTAL.
-            # Como los datos están separados en Sensor_1, Sensor_2, Sensor_3, usamos $unionWith.
+            # Lista de colecciones para consultar
+            collections_to_query = [db_atlas["Sensor_1"], db_atlas["Sensor_2"], db_atlas["Sensor_3"]]
+            all_results = []
             
-            # Se usa Sensor_1 como colección inicial para el pipeline
-            collection = db_atlas["Sensor_1"] 
+            # Criterio de filtrado (match)
+            time_filter = {"timestamp": {"$gte": start_time, "$lte": end_time}}
+            
+            # 1. ITERAR Y OBTENER LOS DATOS CRUDOS DE CADA COLECCIÓN
+            for collection in collections_to_query:
+                # Ejecutar la consulta simple (sin agregación)
+                cursor = collection.find(time_filter)
+                
+                # 2. MAPEAR al formato plano requerido por Grafana Infinity
+                for doc in cursor:
+                    # Convertir el timestamp a milisegundos de Unix Epoch (formato requerido por Grafana)
+                    # El timestamp se convierte a UTC, luego a epoch time, y finalmente a milisegundos.
+                    time_in_ms = int(doc['timestamp'].replace(tzinfo=timezone.utc).timestamp() * 1000)
+                    
+                    all_results.append({
+                        # 'time' debe ser el timestamp en milisegundos
+                        "time": time_in_ms, 
+                        # 'value' es el estado del sensor (0 o 1)
+                        "value": doc['estado'], 
+                        # 'metric' es el nombre de la colección/sensor (usado para diferenciar series)
+                        "metric": collection.name,
+                        # Campos adicionales que pueden ser útiles en Tablas/Logs de Grafana
+                        "codigosensor": doc['codigosensor'],
+                    })
+            
+            # 3. ORDENAR todos los resultados por tiempo (aunque no es estrictamente necesario, es buena práctica)
+            all_results.sort(key=lambda x: x['time'])
 
-            # Agregación: 
-            # 1. Combinar todas las colecciones (Sensor_1, 2, 3)
-            # 2. Filtrar por rango de tiempo.
-            # 3. Agrupar por intervalo (ej. 5 minutos) y calcular la ocupación total.
-            pipeline = [
-                # Combinar datos de Sensor_2 y Sensor_3
-                {"$unionWith": {"coll": "Sensor_2"}},
-                {"$unionWith": {"coll": "Sensor_3"}},
-                {
-                    "$match": {
-                        # Filtra solo los documentos dentro del rango de tiempo de Grafana
-                        "timestamp": {"$gte": start_time, "$lte": end_time} 
-                    }
-                },
-                {
-                    "$group": {
-                        # Agrupa los documentos en intervalos de 5 minutos
-                        "_id": {
-                            "year": {"$year": "$timestamp"},
-                            "month": {"$month": "$timestamp"},
-                            "day": {"$dayOfMonth": "$timestamp"},
-                            "hour": {"$hour": "$timestamp"},
-                            "minute": {"$subtract": [
-                                {"$minute": "$timestamp"},
-                                {"$mod": [{"$minute": "$timestamp"}, 5]} # Agrupa cada 5 minutos
-                            ]}
-                        },
-                        # Calcula la ocupación total: suma los estados (1=ocupado, 0=libre)
-                        "total_occupied_count": {"$sum": "$estado"}, 
-                        "timestamp_first": {"$min": "$timestamp"} # Obtenemos un timestamp para Grafana
-                    }
-                },
-                {
-                    "$project": {
-                        # Reformatea la salida al formato plano de Grafana
-                        "_id": 0,
-                        "time": {"$toLong": "$timestamp_first"}, # Timestamp en milisegundos
-                        "value": "$total_occupied_count",
-                        "metric": "Ocupación Total"
-                    }
-                },
-                {"$sort": {"time": 1}} # Ordenar cronológicamente
-            ]
-            
-            # Ejecutamos el pipeline en la colección Sensor_1, que ahora incluye las otras dos
-            results = list(collection.aggregate(pipeline))
-            print(f"✅ Consulta MongoDB: {len(results)} puntos agregados usando $unionWith.")
-            return jsonify(results)
+            print(f"✅ Consulta MongoDB: {len(all_results)} documentos crudos obtenidos y mapeados.")
+            return jsonify(all_results)
             
         except Exception as e:
-            print(f"❌ Error al consultar MongoDB para Grafana: {e}")
-            # Si hay un error real en la BD, se simula para no romper el dashboard
-            pass 
+            error_msg = f"❌ Error crítico al consultar MongoDB: {e}"
+            print(error_msg)
+            # Devolver un 500 en caso de error de conexión/consulta
+            return jsonify({"status": "error", "message": error_msg, "results": []}), 500
             
-    # -------------------------------------------------------------------
-    # 🧑‍💻 SIMULACIÓN DE DATOS AGREGADOS (Para cuando db_atlas es None o falla)
-    # -------------------------------------------------------------------
-    
-    # Usaremos los argumentos de Grafana para simular el rango de tiempo
-    try:
-        start_dt = parser.parse(start_str)
-        end_dt = parser.parse(end_str)
-    except:
-        # Fallback si el parser falla
-        end_dt = datetime.now(timezone.utc)
-        start_dt = end_dt - timedelta(hours=6)
+    # Si no hay conexión Atlas (db_atlas es None), devolvemos un 503
+    return jsonify({"status": "error", "message": "🚫 No hay conexión a MongoDB Atlas. Imposible obtener datos reales.", "results": []}), 503
 
-    # El número de sensores definidos es 3
-    TOTAL_SPOTS = 3 
-    
-    response_data = []
-    
-    # Simulación de puntos cada 10 minutos
-    time_increment = timedelta(minutes=10)
-    current_time = start_dt
-
-    while current_time < end_dt:
-        # Simula la ocupación total (entre 0 y 3)
-        occupied_count = random.randint(0, TOTAL_SPOTS)
-        
-        response_data.append({
-            # Grafana Infinity espera el timestamp en milisegundos
-            "time": int(current_time.timestamp() * 1000), 
-            "value": occupied_count,
-            "metric": "Ocupación Total (Simulada)"
-        })
-        current_time += time_increment
-
-    print(f"✨ Simulación de datos para Grafana: {len(response_data)} puntos generados.")
-    return jsonify(response_data)
+if __name__ == '__main__':
+    # Usar host='0.0.0.0' para que sea accesible externamente (como por Docker/Grafana)
+    app.run(host='0.0.0.0', port=6001, debug=True)
