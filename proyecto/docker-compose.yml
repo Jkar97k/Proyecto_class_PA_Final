@@ -72,14 +72,14 @@ services:
       - "3000:3000"
     restart: always
     environment:
-      - GF_INSTALL_PLUGINS=grafana-mongodb-datasource
+      - GF_PLUGINS_PREINSTALL_SYNC=grafana-simple-json-datasource
       - GF_SECURITY_ALLOW_EMBEDDING=true
     volumes:
       - grafana-storage:/var/lib/grafana
     networks:
       - mongito-net
     depends_on:
-      - mongo_db
+      - flask_app
 
 # Redes y volúmenes
 networks:

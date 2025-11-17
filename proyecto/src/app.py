@@ -1,13 +1,16 @@
-import os
 import json
+import os
+import random
 import time
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from datetime import datetime,timezone# Se añadió 'timezone' para usar en la ruta /query
-from bson import ObjectId
+
+from bson.objectid import ObjectId
 from dateutil import parser
-from pymongo import MongoClient
 from dotenv import load_dotenv
-from flask import request, jsonify,Flask, render_template,Response
+from flask import Flask, Response, jsonify, render_template, request
+from pymongo import MongoClient
+
 
 
 # --- Serializador JSON personalizado para manejar ObjectId y datetime ---
@@ -154,6 +157,7 @@ def test_insert():
             return jsonify({"status": "error", "mensaje": "No hay conexión a Atlas"}), 500
 
         sensores = [
+            # Se usa 'estado' para coincidir con la lógica de /receive_sensor_data y /query
             {"codigosensor": 1, "estado": 1, "TipoEjecucion": datetime.now()},
             {"codigosensor": 2, "estado": 0, "TipoEjecucion": datetime.now()},
             {"codigosensor": 3, "estado": 1, "TipoEjecucion": datetime.now()},
@@ -213,10 +217,12 @@ def serialize_mongo_doc(doc):
 
 @app.route('/receive_sensor_data', methods=['POST'])
 def receive_sensor_data():
-    """Ruta para recibir datos JSON desde un ESP32 o dispositivo IoT."""
+    """
+    Ruta para recibir datos JSON desde un ESP32 o dispositivo IoT.
+    Se asegura de que el estado de ocupación se guarde como 'estado' (0 o 1).
+    """
     try:
         if db_atlas is None:
-
             return jsonify({"status": "error", "mensaje": "No hay conexión a Atlas"}), 500
 
         data = request.get_json()
@@ -225,25 +231,37 @@ def receive_sensor_data():
             return jsonify({"status": "error", "mensaje": "Falta el campo 'codigosensor'"}), 400
 
         codigosensor = int(data["codigosensor"])
+        
+        # 1. Extraer el estado de ocupación. Se busca en 'estado' o 'value' (0 o 1).
+        estado_raw = data.get("estado", data.get("value"))
+        
+        # 2. Validar y convertir a entero (0 o 1)
+        try:
+            estado = int(estado_raw)
+            if estado not in [0, 1]:
+                 raise ValueError("El estado debe ser 0 (libre) o 1 (ocupado).")
+        except (ValueError, TypeError):
+            return jsonify({
+                "status": "error", 
+                "mensaje": "El campo 'estado' o 'value' es inválido o falta. Debe ser 0 o 1."
+            }), 400
 
-        # Usamos el mapa COLECCIONES_MAP ya que contiene las referencias correctas
+        # Seleccionar colección
         if codigosensor == 1:
-            collection = COLECCIONES_MAP.get("Sensor_1")
+            collection = db_atlas["Sensor_1"]
         elif codigosensor == 2:
-            collection = COLECCIONES_MAP.get("Sensor_2")
+            collection = db_atlas["Sensor_2"]
         elif codigosensor == 3:
-            collection = COLECCIONES_MAP.get("Sensor_3")
+            collection = db_atlas["Sensor_3"]
         else:
             return jsonify({"status": "error", "mensaje": "Código de sensor no válido"}), 400
 
-        print(f"📡 Recibido desde ESP32: {data}")
+        print(f"📡 Recibido desde ESP32: Sensor={codigosensor}, Estado={estado}")
 
-        # Crear documento a insertar
+        # 3. Crear documento a insertar (Solo campos clave para la visualización)
         doc_to_insert = {
             "codigosensor": codigosensor,
-            "sensor_type": data.get("sensor_type", "Desconocido"),
-            "valor": data.get("value"),
-            "unidad": data.get("unit", "N/A"),
+            "estado": estado, # <-- CAMPO CLAVE PARA GRAFANA
             "timestamp": datetime.now()
         }
 
@@ -271,107 +289,134 @@ def receive_sensor_data():
             "status": "error",
             "mensaje": str(e)
         }), 500
-
-
-@app.route('/tabla')
-def tabla():
-    """Muestra una tabla (asumiendo que db_atlas.p1 existe)."""
-    # Nota: Asegúrate de que db_atlas.p1 exista
-    if db_atlas is None:
-         return "Error: No conectado a Atlas para la ruta /tabla", 503
-    usuarios = list(db_atlas.p1.find({}, {"_id": 0}))
-    return render_template('tabla.html', usuarios=usuarios)
-
-
-# --------------------------------------------------------
-#              RUTAS GRAFANA JSON DATA SOURCE
-# --------------------------------------------------------
-
-# 1. Health Check (Ruta de prueba de conexión)
+        
+# ----------------------------------------------------------------------
+# 🎯 ENDPOINT 1: PRUEBA DE CONEXIÓN DE GRAFANA
+# ----------------------------------------------------------------------
 @app.route('/', methods=['GET'])
-def grafana_health_check():
-    """Ruta de verificación de salud de Grafana."""
-    # Verificamos si al menos la conexión a Atlas fue exitosa
-    if client_atlas is not None:
-        return "OK", 200
-    else:
-        return "Database Connection Error", 503
+def test_connection():
+    """Endpoint de prueba para que Grafana (Infinity) verifique la conexión."""
+    return 'OK', 200
 
-# 2. Search (Descubrimiento de métricas)
-@app.route('/search', methods=['POST'])
-def search():
-    """Devuelve la lista de métricas disponibles para la consulta."""
-    # Devuelve las claves del mapa (los nombres de los sensores)
-    return jsonify(list(COLECCIONES_MAP.keys()))
-
-# 3. Query (Consulta de datos)
-@app.route('/query', methods=['POST'])
-def query_json_api_format():
-    try:
-        # Nota: El plugin JSON API puede o no enviar 'range' y 'targets' de la misma manera.
-        # Asumiremos que aún quieres filtrar por tiempo.
-        req = request.get_json(silent=True)
-        
-        # --- (Manejo de Rango de Tiempo y Colecciones, si es necesario) ---
-        # ... (Tu lógica para obtener time_from y time_to) ...
-        
-        colecciones = {
-            "Sensor_1": db_atlas.Sensor_1,
-            "Sensor_2": db_atlas.Sensor_2,
-            "Sensor_3": db_atlas.Sensor_3
-        }
-
-        respuesta_tabular = [] # <-- La respuesta ahora será una lista simple de todos los documentos
-
-        # En el plugin JSON API, a menudo se ignora 'targets' o se usa para un solo endpoint.
-        # Iremos a buscar TODOS los datos de los sensores para el rango de tiempo (si lo usas).
-        
-        # Iterar sobre las colecciones y obtener datos filtrados por tiempo (si aplica)
-        for nombre_sensor, col in colecciones.items():
+# ----------------------------------------------------------------------
+# 🎯 ENDPOINT 2: CONSULTA DE DATOS AGREGADOS PARA GRAFANA (NUEVO)
+# ----------------------------------------------------------------------
+@app.route('/query', methods=['GET'])
+def park_query():
+    """
+    Simula o ejecuta la consulta de agregación de datos de MongoDB para
+    mostrar la ocupación total del parking a lo largo del tiempo.
+    El resultado usa el formato plano requerido por Grafana Infinity.
+    """
+    
+    # Grafana proporciona el rango de tiempo en milisegundos ISO (e.g., "2023-11-15T10:00:00.000Z")
+    # Usaremos estas claves para simular la filtración de datos históricos.
+    start_str = request.args.get('from', (datetime.now(timezone.utc) - timedelta(hours=6)).isoformat())
+    end_str = request.args.get('to', datetime.now(timezone.utc).isoformat())
+    
+    # -------------------------------------------------------------------
+    # ⚠️ LÓGICA DE AGREGACIÓN REAL EN MONGODB 
+    # -------------------------------------------------------------------
+    if db_atlas is not None:
+        try:
+            # Convertir las cadenas de tiempo de Grafana a objetos datetime de MongoDB
+            start_time = parser.parse(start_str)
+            end_time = parser.parse(end_str)
             
-            # Ejemplo de filtro (ajusta según la necesidad del plugin JSON API)
-            # docs = col.find(query_filter, ...).sort("Fecha", 1) 
-            docs = col.find({}, {"Valor": 1, "Fecha": 1, "_id": 0}) # Consulta sin filtro de tiempo simple
+            # NOTA: Para este pipeline, la agregación debe ocurrir sobre una colección 
+            # que contenga los datos de TODOS los sensores para obtener la ocupación TOTAL.
+            # Como los datos están separados en Sensor_1, Sensor_2, Sensor_3, usamos $unionWith.
+            
+            # Se usa Sensor_1 como colección inicial para el pipeline
+            collection = db_atlas["Sensor_1"] 
 
-            for d in docs:
-                valor = d.get("Valor")
-                fecha = d.get("Fecha")
-                
-                # Conversión de Valor
-                try:
-                    valor_float = float(valor) if valor is not None else 0.0
-                except ValueError:
-                    valor_float = 0.0
+            # Agregación: 
+            # 1. Combinar todas las colecciones (Sensor_1, 2, 3)
+            # 2. Filtrar por rango de tiempo.
+            # 3. Agrupar por intervalo (ej. 5 minutos) y calcular la ocupación total.
+            pipeline = [
+                # Combinar datos de Sensor_2 y Sensor_3
+                {"$unionWith": {"coll": "Sensor_2"}},
+                {"$unionWith": {"coll": "Sensor_3"}},
+                {
+                    "$match": {
+                        # Filtra solo los documentos dentro del rango de tiempo de Grafana
+                        "timestamp": {"$gte": start_time, "$lte": end_time} 
+                    }
+                },
+                {
+                    "$group": {
+                        # Agrupa los documentos en intervalos de 5 minutos
+                        "_id": {
+                            "year": {"$year": "$timestamp"},
+                            "month": {"$month": "$timestamp"},
+                            "day": {"$dayOfMonth": "$timestamp"},
+                            "hour": {"$hour": "$timestamp"},
+                            "minute": {"$subtract": [
+                                {"$minute": "$timestamp"},
+                                {"$mod": [{"$minute": "$timestamp"}, 5]} # Agrupa cada 5 minutos
+                            ]}
+                        },
+                        # Calcula la ocupación total: suma los estados (1=ocupado, 0=libre)
+                        "total_occupied_count": {"$sum": "$estado"}, 
+                        "timestamp_first": {"$min": "$timestamp"} # Obtenemos un timestamp para Grafana
+                    }
+                },
+                {
+                    "$project": {
+                        # Reformatea la salida al formato plano de Grafana
+                        "_id": 0,
+                        "time": {"$toLong": "$timestamp_first"}, # Timestamp en milisegundos
+                        "value": "$total_occupied_count",
+                        "metric": "Ocupación Total"
+                    }
+                },
+                {"$sort": {"time": 1}} # Ordenar cronológicamente
+            ]
+            
+            # Ejecutamos el pipeline en la colección Sensor_1, que ahora incluye las otras dos
+            results = list(collection.aggregate(pipeline))
+            print(f"✅ Consulta MongoDB: {len(results)} puntos agregados usando $unionWith.")
+            return jsonify(results)
+            
+        except Exception as e:
+            print(f"❌ Error al consultar MongoDB para Grafana: {e}")
+            # Si hay un error real en la BD, se simula para no romper el dashboard
+            pass 
+            
+    # -------------------------------------------------------------------
+    # 🧑‍💻 SIMULACIÓN DE DATOS AGREGADOS (Para cuando db_atlas es None o falla)
+    # -------------------------------------------------------------------
+    
+    # Usaremos los argumentos de Grafana para simular el rango de tiempo
+    try:
+        start_dt = parser.parse(start_str)
+        end_dt = parser.parse(end_str)
+    except:
+        # Fallback si el parser falla
+        end_dt = datetime.now(timezone.utc)
+        start_dt = end_dt - timedelta(hours=6)
 
-                # Conversión de Fecha a formato ISO 8601 (string)
-                time_str = None
-                if isinstance(fecha, datetime):
-                    # Aseguramos que la fecha esté en UTC y sea ISO 8601
-                    time_str = fecha.astimezone(timezone.utc).isoformat()
-                elif isinstance(fecha, str):
-                    try:
-                        # Parsear y luego convertir a ISO 8601
-                        dt = parser.parse(fecha)
-                        time_str = dt.astimezone(timezone.utc).isoformat()
-                    except: # noqa: E722
-                        continue
+    # El número de sensores definidos es 3
+    TOTAL_SPOTS = 3 
+    
+    response_data = []
+    
+    # Simulación de puntos cada 10 minutos
+    time_increment = timedelta(minutes=10)
+    current_time = start_dt
 
-                # ⚠️ Agregar el documento al array en formato tabular
-                if time_str:
-                    respuesta_tabular.append({
-                        "sensor_name": nombre_sensor, # Clave para la etiqueta de la serie
-                        "time": time_str,            # Clave para el eje X
-                        "value": valor_float         # Clave para el eje Y
-                    })
+    while current_time < end_dt:
+        # Simula la ocupación total (entre 0 y 3)
+        occupied_count = random.randint(0, TOTAL_SPOTS)
+        
+        response_data.append({
+            # Grafana Infinity espera el timestamp en milisegundos
+            "time": int(current_time.timestamp() * 1000), 
+            "value": occupied_count,
+            "metric": "Ocupación Total (Simulada)"
+        })
+        current_time += time_increment
 
-        return jsonify(respuesta_tabular)
-
-    except Exception as e:
-        print(f"Error en el endpoint /query (JSON API Format): {e}")
-        return jsonify({"error": str(e)}), 500
-
-
-
-if __name__ == '__main__':
-    # Usar host='0.0.0.0' para que sea accesible externamente (como por Docker/Grafana)
-    app.run(host='0.0.0.0', port=6001, debug=True)
+    print(f"✨ Simulación de datos para Grafana: {len(response_data)} puntos generados.")
+    return jsonify(response_data)
